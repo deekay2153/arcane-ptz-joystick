@@ -1,0 +1,102 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcane PTZ Joystick preview</title>
+<style>
+  html, body { margin: 0; min-height: 100%; background: #0f1115; font-family: Roboto, system-ui, sans-serif; color: #e6e8ec;
+    --primary-color: #3b82f6; --card-background-color: #1c1f26; --divider-color: rgba(255,255,255,0.1);
+    --primary-text-color: #e6e8ec; --secondary-text-color: #9aa3b0; }
+  main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  /* A stand-in for a camera card with the joystick laid on top. */
+  .cam { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: #000; }
+  .cam canvas { width: 100%; height: 100%; display: block; }
+  .cam .over { position: absolute; left: 16px; bottom: 16px; }
+  .side h2 { font-size: 14px; font-weight: 500; color: var(--secondary-text-color); margin: 0 0 8px; }
+  #log { font: 12px/1.5 ui-monospace, monospace; color: var(--secondary-text-color); white-space: pre-wrap; margin: 12px 0 0; min-height: 7.5em; }
+</style>
+<main>
+  <div class="cam" id="cam">
+    <canvas id="pic" width="1280" height="720"></canvas>
+    <div class="over"><arcane-ptz-joystick id="overlay"></arcane-ptz-joystick></div>
+  </div>
+  <div class="side">
+    <h2>As a card</h2>
+    <arcane-ptz-joystick id="card"></arcane-ptz-joystick>
+    <pre id="log"></pre>
+  </div>
+</main>
+<script type="module">
+import '../dist/arcane-ptz-joystick.js';
+
+// A made-up view that pans, tilts and zooms when the scripts are called.
+const view = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0 };
+const pic = document.getElementById('pic');
+const g = pic.getContext('2d');
+function draw() {
+  const W = 1280, H = 720;
+  view.x += view.vx * 0.12; view.y += view.vy * 0.12;
+  view.z = Math.min(4, Math.max(1, view.z * (1 + view.vz * 0.0004)));
+  g.save();
+  g.fillStyle = '#0d1b2a'; g.fillRect(0, 0, W, H);
+  g.translate(W / 2, H / 2); g.scale(view.z, view.z); g.translate(-view.x, view.y);
+  const sky = g.createLinearGradient(0, -900, 0, 100);
+  sky.addColorStop(0, '#4f8fd6'); sky.addColorStop(1, '#bcd9f0');
+  g.fillStyle = sky; g.fillRect(-4000, -900, 8000, 1000);
+  g.fillStyle = '#4f7a46'; g.fillRect(-4000, 100, 8000, 900);
+  g.fillStyle = '#6b6f75'; g.fillRect(-4000, 240, 8000, 150);
+  g.strokeStyle = '#e9e5d6'; g.lineWidth = 6; g.setLineDash([60, 50]);
+  g.beginPath(); g.moveTo(-4000, 315); g.lineTo(4000, 315); g.stroke(); g.setLineDash([]);
+  for (let i = -6; i <= 6; i++) {
+    const hx = i * 520;
+    g.fillStyle = ['#c9b79c', '#d9d4c7', '#b9a58c'][(i + 9) % 3]; g.fillRect(hx - 150, -60, 300, 160);
+    g.fillStyle = '#7d4b3a'; g.beginPath(); g.moveTo(hx - 175, -60); g.lineTo(hx, -170); g.lineTo(hx + 175, -60); g.fill();
+    g.fillStyle = '#28364a'; g.fillRect(hx - 110, -20, 60, 50); g.fillRect(hx + 50, -20, 60, 50);
+    g.fillStyle = '#5a3b2c'; g.fillRect(hx - 25, 20, 50, 80);
+    g.fillStyle = '#3e6b39'; g.beginPath(); g.arc(hx + 260, 40, 55, 0, 7); g.fill();
+    g.fillStyle = '#5b3d2b'; g.fillRect(hx + 252, 80, 16, 30);
+  }
+  g.restore();
+  g.fillStyle = 'rgba(0,0,0,.5)'; g.fillRect(16, 16, 250, 34);
+  g.fillStyle = '#fff'; g.font = '20px system-ui'; g.fillText(`Street cam  ${view.z.toFixed(1)}x`, 28, 40);
+  requestAnimationFrame(draw);
+}
+draw();
+
+const calls = [];
+const log = (s, d) => {
+  calls.push(`${s} ${JSON.stringify(d)}`);
+  document.getElementById('log').textContent = calls.slice(-6).join('\n');
+};
+const hass = {
+  states: {},
+  callService: (domain, script, data) => new Promise((res) => {
+    log(`${domain}.${script}`, data || {});
+    if (script === 'ptz_move') { view.vx = data.pan; view.vy = data.tilt; }
+    if (script === 'ptz_start_zoom_in') view.vz = 100;
+    if (script === 'ptz_start_zoom_out') view.vz = -100;
+    if (script === 'ptz_stop') { view.vx = view.vy = view.vz = 0; }
+    if (script === 'ptz_zoom_out_full') view.z = 1;
+    if (script === 'ptz_aim') {
+      const cx = (data.x2 != null ? (data.x + data.x2) / 2 : data.x) - 50;
+      const cy = (data.y2 != null ? (data.y + data.y2) / 2 : data.y) - 50;
+      view.x += (cx / 100) * 1280 / view.z; view.y -= (cy / 100) * 720 / view.z;
+      if (data.x2 != null) view.z = Math.min(4, view.z * 100 / Math.max(10, data.x2 - data.x));
+    }
+    setTimeout(res, 40);
+  }),
+};
+const q = new URLSearchParams(location.search);
+const scripts = {
+  script: 'script.ptz_move', zoom: true, aim: true,
+  zoom_in_script: 'script.ptz_start_zoom_in', zoom_out_script: 'script.ptz_start_zoom_out',
+  zoom_stop_script: 'script.ptz_stop', zoom_out_full_script: 'script.ptz_zoom_out_full',
+  aim_script: 'script.ptz_aim',
+};
+const overlay = document.getElementById('overlay');
+overlay.setConfig({ type: 'custom:arcane-ptz-joystick', ...scripts, card: false, size: 130 });
+overlay.hass = hass;
+const card = document.getElementById('card');
+card.setConfig({ type: 'custom:arcane-ptz-joystick', ...scripts, arrange: q.get('arrange') || 'side' });
+card.hass = hass;
+</script>

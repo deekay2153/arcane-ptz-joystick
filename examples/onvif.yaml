@@ -1,0 +1,176 @@
+# Arcane PTZ Joystick: scripts for ONVIF cameras (Reolink, Amcrest, Dahua,
+# TP-Link Tapo, Hikvision and most others), using Home Assistant's built-in
+# ONVIF integration.
+#
+# ONVIF in Home Assistant has one speed for both directions, and each move
+# runs for a short moment, so these scripts keep re-sending the move while you
+# hold the knob. Diagonal moves work; the speed follows how far you drag.
+# These scripts have not been tried on every brand; if your camera needs a
+# change, please open an issue.
+#
+# Change "camera:" in every script that has one to your camera's ONVIF
+# camera entity (ptz_onvif_move_loop gets it from ptz_move).
+#
+# Use it as a package (config/packages/ptz_onvif.yaml), or paste each script
+# into Settings > Automations & scenes > Scripts > Add > Edit in YAML.
+#
+# Tap-to-aim needs a camera-specific command (ONVIF has no common one), so
+# leave "aim" off with these scripts.
+
+script:
+  ptz_move:
+    alias: PTZ Move
+    description: Pan and tilt together. pan and tilt are speeds from -100 to 100 (right and up positive). 0 and 0 stops.
+    icon: mdi:gamepad-circle
+    # Returns straight away: the moving itself is done by ptz_onvif_move_loop,
+    # so the card can send the next direction while the camera moves.
+    mode: queued
+    max: 10
+    fields:
+      pan:
+        description: Pan speed, -100 (left) to 100 (right)
+        default: 0
+        selector:
+          number: {min: -100, max: 100}
+      tilt:
+        description: Tilt speed, -100 (down) to 100 (up)
+        default: 0
+        selector:
+          number: {min: -100, max: 100}
+    variables:
+      camera: camera.my_ptz_camera
+      p: "{{ pan | default(0) | int(0) }}"
+      t: "{{ tilt | default(0) | int(0) }}"
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ p == 0 and t == 0 }}"
+        then:
+          - action: script.turn_off
+            target:
+              entity_id: script.ptz_onvif_move_loop
+          - action: onvif.ptz
+            target:
+              entity_id: "{{ camera }}"
+            data:
+              move_mode: Stop
+        else:
+          - action: script.turn_on
+            target:
+              entity_id: script.ptz_onvif_move_loop
+            data:
+              variables:
+                camera: "{{ camera }}"
+                p: "{{ p }}"
+                t: "{{ t }}"
+
+  ptz_onvif_move_loop:
+    alias: PTZ ONVIF Move Loop
+    description: Used by ptz_move. Keeps the camera moving for up to 30 seconds.
+    icon: mdi:autorenew
+    # restart: a new direction from ptz_move replaces the running one.
+    mode: restart
+    fields:
+      camera:
+        selector:
+          entity: {domain: camera}
+      p:
+        selector:
+          number: {min: -100, max: 100}
+      t:
+        selector:
+          number: {min: -100, max: 100}
+    sequence:
+      - variables:
+          pi: "{{ p | int(0) }}"
+          ti: "{{ t | int(0) }}"
+          speed: "{{ ([[pi | abs, ti | abs] | max, 100] | min) / 100 }}"
+      - repeat:
+          count: 60
+          sequence:
+            - choose:
+                - conditions: "{{ pi != 0 and ti != 0 }}"
+                  sequence:
+                    - action: onvif.ptz
+                      target:
+                        entity_id: "{{ camera }}"
+                      data:
+                        move_mode: ContinuousMove
+                        pan: "{{ 'RIGHT' if pi > 0 else 'LEFT' }}"
+                        tilt: "{{ 'UP' if ti > 0 else 'DOWN' }}"
+                        speed: "{{ speed }}"
+                        continuous_duration: 0.5
+                - conditions: "{{ pi != 0 }}"
+                  sequence:
+                    - action: onvif.ptz
+                      target:
+                        entity_id: "{{ camera }}"
+                      data:
+                        move_mode: ContinuousMove
+                        pan: "{{ 'RIGHT' if pi > 0 else 'LEFT' }}"
+                        speed: "{{ speed }}"
+                        continuous_duration: 0.5
+                - conditions: "{{ ti != 0 }}"
+                  sequence:
+                    - action: onvif.ptz
+                      target:
+                        entity_id: "{{ camera }}"
+                      data:
+                        move_mode: ContinuousMove
+                        tilt: "{{ 'UP' if ti > 0 else 'DOWN' }}"
+                        speed: "{{ speed }}"
+                        continuous_duration: 0.5
+
+  ptz_start_zoom_in:
+    alias: PTZ Start Zoom In
+    icon: mdi:magnify-plus
+    mode: restart
+    variables:
+      camera: camera.my_ptz_camera
+    sequence:
+      - repeat:
+          count: 40
+          sequence:
+            - action: onvif.ptz
+              target:
+                entity_id: "{{ camera }}"
+              data:
+                move_mode: ContinuousMove
+                zoom: ZOOM_IN
+                continuous_duration: 0.5
+
+  ptz_start_zoom_out:
+    alias: PTZ Start Zoom Out
+    icon: mdi:magnify-minus
+    mode: restart
+    variables:
+      camera: camera.my_ptz_camera
+    sequence:
+      - repeat:
+          count: 40
+          sequence:
+            - action: onvif.ptz
+              target:
+                entity_id: "{{ camera }}"
+              data:
+                move_mode: ContinuousMove
+                zoom: ZOOM_OUT
+                continuous_duration: 0.5
+
+  ptz_stop:
+    alias: PTZ Stop
+    icon: mdi:stop
+    mode: restart
+    variables:
+      camera: camera.my_ptz_camera
+    sequence:
+      - action: script.turn_off
+        target:
+          entity_id:
+            - script.ptz_start_zoom_in
+            - script.ptz_start_zoom_out
+      - action: onvif.ptz
+        target:
+          entity_id: "{{ camera }}"
+        data:
+          move_mode: Stop

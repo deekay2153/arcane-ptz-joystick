@@ -1,0 +1,173 @@
+# Arcane PTZ Joystick: scripts for Hikvision PTZ cameras.
+#
+# Needs the "Hikvision Next" integration (HACS: maciej-or/hikvision_next),
+# which sends the camera's own ISAPI commands. Moves are smooth: the camera
+# gets the pan and tilt speeds exactly as you drag.
+#
+# Change the two lines under "variables" in EVERY script below:
+#   camera   any camera entity of that Hikvision device (used to find the
+#            integration entry, so you never have to copy its id)
+#   channel  the PTZ channel: 1 for a camera added on its own, the NVR channel
+#            number when the camera is added through an NVR
+#
+# Use it as a package (config/packages/ptz_hikvision.yaml), or paste each
+# script into Settings > Automations & scenes > Scripts > Add > Edit in YAML
+# (paste the part under the script's name and give it the same id).
+
+script:
+  ptz_move:
+    alias: PTZ Move
+    description: Pan and tilt together. pan and tilt are speeds from -100 to 100 (right and up positive). 0 and 0 stops.
+    icon: mdi:gamepad-circle
+    mode: parallel
+    max: 4
+    fields:
+      pan:
+        description: Pan speed, -100 (left) to 100 (right)
+        default: 0
+        selector:
+          number: {min: -100, max: 100}
+      tilt:
+        description: Tilt speed, -100 (down) to 100 (up)
+        default: 0
+        selector:
+          number: {min: -100, max: 100}
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/continuous"
+          payload: >-
+            <PTZData><pan>{{ [[pan | default(0) | int(0), -100] | max, 100] | min }}</pan><tilt>{{ [[tilt | default(0) | int(0), -100] | max, 100] | min }}</tilt><zoom>0</zoom></PTZData>
+        response_variable: _result
+
+  ptz_start_zoom_in:
+    alias: PTZ Start Zoom In
+    icon: mdi:magnify-plus
+    mode: parallel
+    max: 3
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/continuous"
+          payload: <PTZData><pan>0</pan><tilt>0</tilt><zoom>100</zoom></PTZData>
+        response_variable: _result
+
+  ptz_start_zoom_out:
+    alias: PTZ Start Zoom Out
+    icon: mdi:magnify-minus
+    mode: parallel
+    max: 3
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/continuous"
+          payload: <PTZData><pan>0</pan><tilt>0</tilt><zoom>-100</zoom></PTZData>
+        response_variable: _result
+
+  ptz_stop:
+    alias: PTZ Stop
+    icon: mdi:stop
+    mode: parallel
+    max: 3
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/continuous"
+          payload: <PTZData><pan>0</pan><tilt>0</tilt><zoom>0</zoom></PTZData>
+        response_variable: _result
+
+  ptz_zoom_out_full:
+    alias: PTZ Zoom Out Fully
+    description: Zooms all the way out without changing where the camera points (double-tap the - button).
+    icon: mdi:magnify-minus-outline
+    mode: restart
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: GET
+          path: "/PTZCtrl/channels/{{ channel }}/status"
+        response_variable: status
+      - variables:
+          elevation: "{{ (status.data | regex_findall_index('<elevation>(-?\\d+)</elevation>')) | int(0) }}"
+          azimuth: "{{ (status.data | regex_findall_index('<azimuth>(-?\\d+)</azimuth>')) | int(0) }}"
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/absolute"
+          payload: >-
+            <PTZData><AbsoluteHigh><elevation>{{ elevation }}</elevation><azimuth>{{ azimuth }}</azimuth><absoluteZoom>10</absoluteZoom></AbsoluteHigh></PTZData>
+        response_variable: _result
+
+  ptz_aim:
+    alias: PTZ Aim
+    description: >-
+      Points the camera at a spot in the picture, or zooms in to a box. x and y
+      are percent of the picture from its left and top edge. With x2 and y2
+      (the box's bottom-right corner) the camera zooms in to the box. Uses
+      Hikvision 3D positioning, which most Hikvision PTZ cameras support.
+    icon: mdi:crosshairs-gps
+    mode: parallel
+    max: 3
+    fields:
+      x:
+        description: Percent from the left edge of the picture
+        default: 50
+        selector:
+          number: {min: 0, max: 100, step: 0.1}
+      y:
+        description: Percent from the top edge of the picture
+        default: 50
+        selector:
+          number: {min: 0, max: 100, step: 0.1}
+      x2:
+        description: Optional, right edge of a zoom box
+        selector:
+          number: {min: 0, max: 100, step: 0.1}
+      y2:
+        description: Optional, bottom edge of a zoom box
+        selector:
+          number: {min: 0, max: 100, step: 0.1}
+    variables:
+      camera: camera.my_ptz_camera
+      channel: 1
+    sequence:
+      # 3D positioning counts 0-255 across the picture, with Y from the BOTTOM.
+      - variables:
+          px: "{{ (([[x | default(50) | float(50), 0] | max, 100] | min) * 2.55) | round | int }}"
+          py: "{{ ((100 - ([[y | default(50) | float(50), 0] | max, 100] | min)) * 2.55) | round | int }}"
+      - variables:
+          px2: "{{ (([[x2 | float(-1), 0] | max, 100] | min) * 2.55) | round | int if x2 is defined and y2 is defined else px }}"
+          py2: "{{ ((100 - ([[y2 | float(-1), 0] | max, 100] | min)) * 2.55) | round | int if x2 is defined and y2 is defined else py }}"
+      - action: hikvision_next.isapi_request
+        data:
+          config_entry_id: "{{ config_entry_id(camera) }}"
+          method: PUT
+          path: "/PTZCtrl/channels/{{ channel }}/position3D"
+          payload: >-
+            <Position3D><StartPoint><positionX>{{ px }}</positionX><positionY>{{ py }}</positionY></StartPoint><EndPoint><positionX>{{ px2 }}</positionX><positionY>{{ py2 }}</positionY></EndPoint></Position3D>
+        response_variable: _result

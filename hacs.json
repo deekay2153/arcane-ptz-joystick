@@ -1,0 +1,7 @@
+{
+  "name": "Arcane PTZ Joystick",
+  "filename": "arcane-ptz-joystick.js",
+  "content_in_root": false,
+  "render_readme": true,
+  "homeassistant": "2024.11.0"
+}
